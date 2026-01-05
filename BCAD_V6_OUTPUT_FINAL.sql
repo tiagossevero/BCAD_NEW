@@ -167,75 +167,74 @@ COMPUTE STATS gessimples.bcad_v6_icms_cobrar;
 -- ============================================================================
 -- PARTE 6: OUTPUT FINAL - FORMATO 100% ACL
 -- Tabela principal para o Streamlit
+-- JOIN entre bcad_13c (resumo) e bcad_14c (detalhe)
 -- ============================================================================
 
 DROP TABLE IF EXISTS gessimples.bcad_v6_output_final;
 CREATE TABLE gessimples.bcad_v6_output_final STORED AS PARQUET AS
 SELECT
-    -- Dados do Grupo
-    v.num_grupo,
-    v.qtd_empresas_sn + v.qtd_empresas_normal AS qte_cnpj,
-    (SELECT COUNT(DISTINCT cpf_socio)
-     FROM gessimples.bcad_14c_violacoes_detalhe_pgdas d
-     WHERE d.num_grupo = v.num_grupo) AS qte_socio,
+    -- Dados do Grupo (da tabela 13c - resumo)
+    d.num_grupo,
+    COALESCE(g.qtd_empresas_total, g.qtd_empresas_sn + g.qtd_empresas_normal) AS qte_cnpj,
+    1 AS qte_socio,  -- Sera recalculado depois se necessario
 
     -- Valores
     COALESCE(ic.vl_ct, 0.00) AS vl_ct,
-    v.receita_bruta_empresa AS vl_rba_pgdas,
-    v.receita_global_grupo AS receita_pa_fato,
+    d.receita_bruta_empresa AS vl_rba_pgdas,
+    d.receita_global_grupo AS receita_pa_fato,
 
-    -- Dados da Empresa
-    CONCAT(v.cnpj_raiz, '0001') AS cnpj,  -- Simplificado, ajustar se necessário
-    v.cnpj_raiz,
-    v.cpf_socio AS cpf,
-    v.uf,
+    -- Dados da Empresa (da tabela 14c - detalhe)
+    d.cnpj_completo AS cnpj,
+    d.cnpj_raiz,
+    d.cpf_socio AS cpf,
+    d.uf,
 
-    -- Datas e Qualificação
+    -- Datas e Qualificacao
     '' AS dt_ini_qualificacao,
     '' AS qualificacao,
 
     -- Regime
     CASE
-        WHEN v.flag_simples_nacional = 1 THEN 'SN'
+        WHEN d.flag_simples_nacional = 1 THEN 'SN'
         ELSE 'NL'
     END AS regime_no_efeito,
 
     -- FLAG_PERIODO baseado em ano_apuracao
-    CASE v.ano_apuracao
+    CASE d.ano_apuracao
         WHEN 2021 THEN '21'
         WHEN 2022 THEN '22'
         WHEN 2023 THEN '23'
         WHEN 2024 THEN '24'
         WHEN 2025 THEN '25'
-        ELSE CAST(v.ano_apuracao AS STRING)
+        ELSE CAST(d.ano_apuracao AS STRING)
     END AS flag_periodo,
 
-    -- Períodos
-    CAST(v.periodo_exclusao AS STRING) AS dt_fato,
+    -- Periodos
+    CAST(d.periodo_exclusao AS STRING) AS dt_fato,
 
-    -- DT_EFEITO (mês seguinte ao fato)
+    -- DT_EFEITO (mes seguinte ao fato)
     CASE
-        WHEN v.periodo_exclusao % 100 = 12
-        THEN CAST((v.periodo_exclusao / 100 + 1) * 100 + 1 AS STRING)
-        ELSE CAST(v.periodo_exclusao + 1 AS STRING)
+        WHEN d.periodo_exclusao % 100 = 12
+        THEN CAST((d.periodo_exclusao / 100 + 1) * 100 + 1 AS STRING)
+        ELSE CAST(d.periodo_exclusao + 1 AS STRING)
     END AS dt_efeito,
 
-    CAST(v.periodo_exclusao AS STRING) AS pa_fato_ini,
+    CAST(d.periodo_exclusao AS STRING) AS pa_fato_ini,
     '-' AS pa_fato_fin,
     '' AS pa_fin_resp,
     '' AS pa_resp,
 
-    -- Chave única
+    -- Chave unica
     CONCAT(
-        LPAD(v.cpf_socio, 11, '0'),
-        LPAD(v.cnpj_raiz, 8, '0'),
-        CAST(v.periodo_exclusao AS STRING)
+        LPAD(d.cpf_socio, 11, '0'),
+        LPAD(d.cnpj_raiz, 8, '0'),
+        CAST(d.periodo_exclusao AS STRING)
     ) AS chave_cpf_raiz_pa,
 
     -- EMITE_TE_SC
     CASE
-        WHEN v.uf = 'SC'
-             AND v.flag_simples_nacional = 1
+        WHEN d.uf = 'SC'
+             AND d.flag_simples_nacional = 1
              AND COALESCE(ic.vl_ct, 0) > 0
         THEN 'S'
         ELSE 'N'
@@ -243,7 +242,7 @@ SELECT
 
     -- EMITE_TE
     CASE
-        WHEN v.flag_simples_nacional = 1
+        WHEN d.flag_simples_nacional = 1
              AND COALESCE(ic.vl_ct, 0) > 0
         THEN 'S'
         ELSE 'N'
@@ -252,12 +251,12 @@ SELECT
     -- ACAO
     CASE
         WHEN COALESCE(ic.vl_ct, 0) > 0
-             AND v.uf = 'SC'
-             AND v.flag_simples_nacional = 1
+             AND d.uf = 'SC'
+             AND d.flag_simples_nacional = 1
         THEN 'EXCLUSAO_COM_DEBITO'
         WHEN COALESCE(ic.vl_ct, 0) = 0
-             AND v.uf = 'SC'
-             AND v.flag_simples_nacional = 1
+             AND d.uf = 'SC'
+             AND d.flag_simples_nacional = 1
         THEN 'EXCLUSAO_SEM_DEBITO'
         ELSE 'SEM_INTERESSE'
     END AS acao,
@@ -265,50 +264,59 @@ SELECT
     -- ACAO_PRIORIDADE
     CASE
         WHEN COALESCE(ic.vl_ct, 0) > 0
-             AND v.uf = 'SC'
-             AND v.flag_simples_nacional = 1
+             AND d.uf = 'SC'
+             AND d.flag_simples_nacional = 1
         THEN 1  -- EXCLUSAO_COM_DEBITO
         WHEN COALESCE(ic.vl_ct, 0) = 0
-             AND v.uf = 'SC'
-             AND v.flag_simples_nacional = 1
+             AND d.uf = 'SC'
+             AND d.flag_simples_nacional = 1
         THEN 2  -- EXCLUSAO_SEM_DEBITO
         ELSE 3  -- SEM_INTERESSE
     END AS acao_prioridade,
 
     -- Dados adicionais
-    v.razao_social,
+    d.razao_social,
     CASE
-        WHEN v.flag_simples_nacional = 1 THEN 'ATIVA - SN'
+        WHEN d.flag_simples_nacional = 1 THEN 'ATIVA - SN'
         ELSE 'ATIVA'
     END AS situacao_cadastral,
 
     -- Tipo de inciso (LC 123/2006)
-    v.tipo_inciso,
-    v.situacao_limite,
-    v.tipo_exclusao,
+    d.tipo_inciso,
+    d.situacao_limite,
+    d.tipo_exclusao,
 
-    -- Ano de apuração
-    v.ano_apuracao,
+    -- Ano de apuracao
+    d.ano_apuracao,
 
     -- Receitas detalhadas
-    v.receita_bruta_empresa,
-    v.receita_global_grupo,
-    v.periodos_declarados,
+    d.receita_bruta_empresa,
+    d.receita_global_grupo,
+    d.periodos_declarados,
 
-    -- Percentual de participação
-    v.perc_participacao,
-    v.flag_maior_10pct,
+    -- Percentual de participacao
+    d.perc_participacao,
+    d.flag_maior_10pct,
 
     -- Fonte dos dados
-    v.fonte_dados,
+    d.fonte_dados,
+
+    -- Dados do resumo (tabela 13c)
+    g.qtd_empresas_sn,
+    g.qtd_empresas_normal,
+    g.ufs_empresas,
 
     CURRENT_TIMESTAMP() AS dt_processamento
 
-FROM gessimples.bcad_14c_violacoes_detalhe_pgdas v
+FROM gessimples.bcad_14c_violacoes_detalhe_pgdas d
+INNER JOIN gessimples.bcad_13c_violacoes_final_pgdas g
+    ON d.num_grupo = g.num_grupo
+    AND d.cpf_socio = g.cpf_socio
+    AND d.ano_apuracao = g.ano_apuracao
 LEFT JOIN gessimples.bcad_v6_icms_cobrar ic
-    ON v.cnpj_raiz = ic.cnpj_raiz
-    AND v.cpf_socio = ic.cpf_socio
-    AND v.num_grupo = ic.num_grupo;
+    ON d.cnpj_raiz = ic.cnpj_raiz
+    AND d.cpf_socio = ic.cpf_socio
+    AND d.num_grupo = ic.num_grupo;
 
 COMPUTE STATS gessimples.bcad_v6_output_final;
 
