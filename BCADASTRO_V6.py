@@ -203,8 +203,8 @@ def testar_conexao(engine):
 
     try:
         with engine.connect() as conn:
-            result = conn.execute(f"SELECT COUNT(*) FROM {DATABASE}.{TABELA_PRINCIPAL} LIMIT 1")
-            return True
+            pass
+        return True
     except Exception as e:
         st.sidebar.error(f"Erro na conexao: {str(e)[:100]}")
         return False
