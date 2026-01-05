@@ -363,7 +363,7 @@ def carregar_lista_grupos(_engine):
     """Carrega lista de grupos para selecao."""
     try:
         query = f"""
-            SELECT DISTINCT
+            SELECT
                 num_grupo,
                 cpf,
                 qte_cnpj,
